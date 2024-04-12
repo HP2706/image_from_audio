@@ -94,7 +94,6 @@ class ImageBindModel:
         self.gb_left = torch.cuda.get_device_properties(0).total_memory / 1e9 - torch.cuda.memory_allocated() / 1e9
         print("gb left", self.gb_left)
 
-    
     @method()
     async def embed(self, batch : List[Data]) -> List[Embedding]:
         assert isinstance(batch, list)
@@ -153,6 +152,8 @@ class DiffusionEncoder():
     def embed(self, batch : List[Data])->List[Embedding]:
         inputs = self.tokenizer([x.text for x in batch], padding=True, return_tensors="pt").to("cuda")
         with torch.no_grad():
-            outputs = self.text_encoder(**inputs).text_embeds.cpu().numpy().tolist() #type: ignore
+            outputs = self.text_encoder(**inputs).text_embeds.cpu().numpy()
+            print("outputs shape", outputs.shape)
+            outputs = outputs.tolist() #type: ignore
         return [Embedding(embedding=np.array(tensor), id=id) for tensor, id in zip(outputs, [x.id for x in batch])]
 
