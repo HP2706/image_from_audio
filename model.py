@@ -3,9 +3,8 @@ from typing import Union, List, Tuple, Any
 import os
 from typing import Dict
 import numpy as np
-from common import stub, TRAIN_DATASET_PATH, TRAIN_DIR_VOLUME
+from common import stub, TRAIN_DATASET_PATH, TRAIN_DIR_VOLUME, Data, Embedding
 from huggingface_hub import snapshot_download
-
 SDXL_PATH = "/sdxl"
 CLIP_MODEL_PATH = f"{SDXL_PATH}/text_encoder_2"
 CLIP_TOKENIZER_PATH = f"{SDXL_PATH}/tokenizer_2"
@@ -55,7 +54,9 @@ image = Image.from_registry(
         "pip install pandas",
         "pip install transformers",
         "pip install diffusers",
-        "pip install hf-transfer"
+        "pip install hf-transfer",
+        "pip install accelerate",
+        "pip install -U pydantic",
     ).run_function(
         setup_func
     ).run_function(
@@ -95,32 +96,24 @@ class ImageBindModel:
 
     
     @method()
-    async def embed(self, batch : List[str]) -> List[np.ndarray]:
-        ''' 
-            we have to send receive the data 
-            as dict although it definitely is a list of DataFormat because of serialization issues
-        '''
-        
-        data_dict = { 
-            'text': data.load_and_transform_text(batch, self.device)
-        }
-
+    async def embed(self, batch : List[Data]) -> List[Embedding]:
+        assert isinstance(batch, list)
+        assert isinstance(batch[0], Data)
         original_dir = os.getcwd()
         os.chdir('/ImageBind')
-        original_dir = os.getcwd()
-       
-
+        data_dict = { 
+            'text': data.load_and_transform_text([x.text for x in batch], self.device), # we only use the text part
+        }
         import time
         t0 = time.time()
         with torch.no_grad():
             embeddings_dict = self.model(data_dict)
-        print("time to embed", time.time() - t0, "for batch size", len(data_dict.keys()))
+        print("time to embed", time.time() - t0, "for batch size", len(batch))
         os.chdir(original_dir)
         embeddings = embeddings_dict['text'].cpu()
-        return [np.array(tensor) for tensor in embeddings.unbind(dim=0)]
+        return [Embedding(embedding=np.array(tensor), id=id) for tensor, id in zip(embeddings.unbind(dim=0), [x.id for x in batch])]
 
-
-""" @stub.cls(
+@stub.cls(
     image=image,
     concurrency_limit=GPU_CONCURRENCY,
     allow_concurrent_inputs=True,
@@ -139,22 +132,27 @@ class DiffusionEncoder():
         print("loading model")
         import os
         
-        model_path = os.path.join(os.getcwd(), CLIP_MODEL_PATH)
-        tokenizer_path = os.path.join(os.getcwd(), CLIP_TOKENIZER_PATH)
-        print(f"current_path ls", os.listdir(os.getcwd()))
-        for file in os.listdir(os.getcwd()):
-            if os.path.isdir(file):
-                print(f"nested dir ls for file {file}", os.listdir(os.path.join(os.getcwd(), file)))
-        print(f"path: {CLIP_MODEL_PATH}", os.listdir(model_path))
-        print(f"path: {CLIP_TOKENIZER_PATH}", os.listdir(tokenizer_path))
-        self.text_encoder = CLIPTextModelWithProjection.from_pretrained(CLIP_MODEL_PATH)
-        print("loading tokenizer")
+        self.text_encoder = CLIPTextModelWithProjection.from_pretrained(CLIP_MODEL_PATH).to("cuda") #type: ignore
         self.tokenizer = AutoTokenizer.from_pretrained(CLIP_TOKENIZER_PATH)
     
     @method()
-    def embed(self, batch : List[str])->List[np.ndarray]:
-        inputs = self.tokenizer(batch, padding=True, return_tensors="pt")
+    def chunk_tokenize(self,  texts: List[Data]) -> List[Data]:
+        '''Tokenizes texts into chunks of up to 77 tokens, ensuring no chunk exceeds the model's max sequence length.'''
+        max_model_length = 77  # This should be set to the maximum length your model can handle
+        tokenized_texts = []
+        
+        for text in texts:
+            tokens = self.tokenizer.tokenize(text.text)
+            token_ids = self.tokenizer.convert_tokens_to_ids(tokens)  
+            chunked_token_ids = [token_ids[i:i + max_model_length] for i in range(0, len(token_ids), max_model_length)]
+            chunked_texts = [self.tokenizer.decode(chunk) for chunk in chunked_token_ids]
+            tokenized_texts.extend([Data(text=chunk, id = f"{text.id}_{i}") for i, chunk in enumerate(chunked_texts)])
+        return tokenized_texts
+
+    @method()
+    def embed(self, batch : List[Data])->List[Embedding]:
+        inputs = self.tokenizer([x.text for x in batch], padding=True, return_tensors="pt").to("cuda")
         with torch.no_grad():
-            outputs = self.text_encoder(**inputs).detach().cpu().numpy().tolist() #type: ignore
-        return outputs
- """
+            outputs = self.text_encoder(**inputs).text_embeds.cpu().numpy().tolist() #type: ignore
+        return [Embedding(embedding=np.array(tensor), id=id) for tensor, id in zip(outputs, [x.id for x in batch])]
+
