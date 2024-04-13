@@ -5,7 +5,7 @@ from typing import Dict
 import numpy as np
 from common import stub, TRAIN_DATASET_PATH, TRAIN_DIR_VOLUME, Data, Embedding
 from huggingface_hub import snapshot_download
-SDXL_PATH = "/sdxl"
+SDXL_PATH = "stabilityai/sdxl-turbo"
 CLIP_MODEL_PATH = f"{SDXL_PATH}/text_encoder_2"
 CLIP_TOKENIZER_PATH = f"{SDXL_PATH}/tokenizer_2"
 
@@ -34,11 +34,6 @@ image = Image.from_registry(
         "clang",
     ).run_commands(
         "clang --version",
-    ).run_commands(
-        "apt-get update",
-        "apt-get install -y libgeos-dev libproj-dev proj-data proj-bin libproj-dev",
-        "apt-get install -y python3-cartopy",
-        "apt-get install -y python3-vtk7",
     ).pip_install(
         "uv"
     ).env(
@@ -69,9 +64,6 @@ with image.imports():
     import torch
     from imagebind.models import imagebind_model
     import imagebind.data as data
-    import pyarrow as pa
-    import tempfile
-    import numpy as np
 
 GPU_CONCURRENCY = 20
 GPU_CONFIG = gpu.A10G()
@@ -93,6 +85,10 @@ class ImageBindModel:
         print("gpu memory after model load in gb", torch.cuda.memory_allocated() / 1e9) 
         self.gb_left = torch.cuda.get_device_properties(0).total_memory / 1e9 - torch.cuda.memory_allocated() / 1e9
         print("gb left", self.gb_left)
+
+    @method()
+    def call(self, data_dict : dict) -> dict:
+        return self.model(data_dict)
 
     @method()
     async def embed(self, batch : List[Data]) -> List[Embedding]:
@@ -129,7 +125,6 @@ class DiffusionEncoder():
         print("loading")
         from transformers import AutoTokenizer, CLIPTextModelWithProjection
         print("loading model")
-        import os
         
         self.text_encoder = CLIPTextModelWithProjection.from_pretrained(CLIP_MODEL_PATH).to("cuda") #type: ignore
         self.tokenizer = AutoTokenizer.from_pretrained(CLIP_TOKENIZER_PATH)
@@ -143,7 +138,7 @@ class DiffusionEncoder():
         for text in texts:
             tokens = self.tokenizer.tokenize(text.text)
             token_ids = self.tokenizer.convert_tokens_to_ids(tokens)  
-            chunked_token_ids = [token_ids[i:i + max_model_length] for i in range(0, len(token_ids), max_model_length)]
+            chunked_token_ids = [token_ids[i:i + max_model_length] for i in range(0, len(token_ids), max_model_length)] #type: ignore
             chunked_texts = [self.tokenizer.decode(chunk) for chunk in chunked_token_ids]
             tokenized_texts.extend([Data(text=chunk, id = f"{text.id}_{i}") for i, chunk in enumerate(chunked_texts)])
         return tokenized_texts

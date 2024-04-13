@@ -32,6 +32,7 @@ with image.imports():
     image = image,
     gpu = gpu.T4(),
     volumes={TRAIN_DATASET_PATH: TRAIN_DIR_VOLUME}, 
+    timeout=3000,
 )
 def train():
     parquet_files = os.listdir(EMBEDDINGS_DATASET_PATH)
@@ -51,7 +52,7 @@ def train():
     dtype = torch.float32
     n_epochs = 10
     lr = 0.001
-    batch_size = 100
+    batch_size = 500
     #load dataset
     for n_layers in [1, 2, 3]:
         model = Adapter(input_dim=input_dim, hidden_dim=input_dim*2, output_dim=output_dim, n_layers=n_layers)
