@@ -1,2 +1,6 @@
 *.ipynb
 gemini.py
+*.wav
+*.mp3
+*.pt
+*.pth
