@@ -8,8 +8,12 @@ import numpy as np
 import PIL.Image
 @stub.local_entrypoint()
 def main():
+    """ with TRAIN_DIR_VOLUME.batch_upload() as batch:
+        batch.put_file("banana.wav", "/dataset/dataset/banana.wav")
+    """
+
+
     #embed_data.remote()
-    #train.remote()
     audio_path = f"{TRAIN_DATASET_PATH}/dataset/eagle.wav"
    
     output = try_diffusion_pipeline.remote(audio_path)

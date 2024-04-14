@@ -56,10 +56,13 @@ def train():
     dtype = torch.float32
     n_epochs = 10
     lr = 0.001
-    batch_size = 500
+    batch_size = 1000
     #load dataset
+    all_losses = []
     for n_layers in [1, 2, 3]:
-        model = Adapter(input_dim=input_dim, hidden_dim=input_dim*2, output_dim=output_dim, n_layers=n_layers)
+        losses = []
+        hidden_dim = input_dim*10
+        model = Adapter(input_dim=input_dim, hidden_dim=hidden_dim, output_dim=output_dim, n_layers=n_layers)
         model.to("cuda").to(dtype)
         optimizer = Adam(model.parameters(), lr=lr)
 
@@ -79,9 +82,11 @@ def train():
                 loss.backward()
                 optimizer.step()
                 print(f"mse loss: {loss.item()} at index {i} epoch {epoch}")
-
+                losses.append(loss.item())
+        all_losses.append(("model_{n_layers}", losses))
         torch.save(model.state_dict(), f"{EMBEDDINGS_DATASET_PATH}/model_{n_layers}.pt")
         with open(f"{EMBEDDINGS_DATASET_PATH}/model_{n_layers}.json", 'w') as f:
-            f.write(json.dumps({'input_dim': input_dim, 'output_dim': output_dim, 'n_layers': n_layers}))
+            f.write(json.dumps({'input_dim': input_dim, 'hidden_dim': hidden_dim, 'output_dim': output_dim, 'n_layers': n_layers}))
         TRAIN_DIR_VOLUME.commit()
+        return all_losses
 

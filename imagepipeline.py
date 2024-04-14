@@ -55,6 +55,7 @@ class AudioToImgPipeline(DiffusionPipeline):
         imagebind : Any,
         adapter: Adapter,
         tokenizer: CLIPTokenizer,
+        #encoder: Optional[CLIPTextModel] = None,
         vae: AutoencoderKL,
         unet: UNet2DConditionModel,
         scheduler: PNDMScheduler,
@@ -71,7 +72,8 @@ class AudioToImgPipeline(DiffusionPipeline):
             unet=unet,
             scheduler=scheduler,
             imagebind=imagebind,
-            image_processor=image_processor
+            image_processor=image_processor,
+            #encoder=encoder
         )
         self.register_to_config(mean=mean, std=std)
 
@@ -96,20 +98,22 @@ class AudioToImgPipeline(DiffusionPipeline):
     def encode_audio(self, audio_path : List[str], device=None):
         device = device or self._execution_device
 
-        ''' os.chdir('/ImageBind')
+        os.chdir('/ImageBind')
         data_dict = { 
             'audio': data.load_and_transform_audio_data(audio_path, device), # we only use the text part
         }
         with torch.no_grad():
             #self.imagebind.to(device)
             print("loading imagebind to device", device)
+            print("data_dict", data_dict)
             embeddings_dict = self.imagebind(data_dict)
+        print("embeddings_dict", embeddings_dict)
         embeddings = embeddings_dict['audio']
         #self.imagebind.to('cpu')
         #self.adapter.to(device)
-        print("loading adapter to device", device) '''
-        emb = torch.randn([len(audio_path), 1024]).to('cuda')
-        aligned_audio_embeddings = self.adapter.forward(emb)
+        #print("loading adapter to device", device) 
+        #embeddings = torch.randn([len(audio_path), 1024]).to('cuda')
+        aligned_audio_embeddings = self.adapter.forward(embeddings)
 
         aligned_audio_embeddings = aligned_audio_embeddings.unsqueeze(1)
         return aligned_audio_embeddings
@@ -117,7 +121,8 @@ class AudioToImgPipeline(DiffusionPipeline):
     @torch.no_grad()
     def __call__(
         self,
-        audio_path: List[str],
+        audio_path: Optional[List[str]],
+        prompt: Optional[List[str]] = None,
         latents: Optional[torch.FloatTensor] = None,
         guidance_scale: float = 7.5,
         height: int = 512,
@@ -181,9 +186,13 @@ class AudioToImgPipeline(DiffusionPipeline):
         assert isinstance(audio_path, list), "audio_path should be a list of strings"
         assert all(isinstance(path, str) for path in audio_path), "audio_path should be a list of strings"
         batch_size = len(audio_path)
-        audio_embedding = self.encode_audio(audio_path, device)
-        print("audio_embedding", audio_embedding.shape, audio_embedding.device)
-        do_classifier_free_guidance = guidance_scale > 1.0
+        if audio_path:
+            audio_embedding = self.encode_audio(audio_path, device)
+            print("audio_embedding", audio_embedding.shape, audio_embedding.device)
+        else:
+            tokens = self.tokenizer.tokenize(prompt)
+            token_ids = self.tokenizer.convert_tokens_to_ids(tokens).to(device)
+            embedding = self.encoder(token_ids)
       
       
         scale_down_factor = 2 ** (len(self.unet.config.block_out_channels) - 1)
@@ -262,17 +271,19 @@ def try_diffusion_pipeline(audio_path : str):
             raise FileNotFoundError(f"Audio file {audio_path} not found")
         print("audio_path", audio_path)
 
-    cfg = json.load(open(f"{EMBEDDINGS_DATASET_PATH}/model_1.json"))
+    cfg = json.load(open(f"{EMBEDDINGS_DATASET_PATH}/model_3.json"))
     print("config", cfg)
     adapter = Adapter(
-    input_dim=cfg['input_dim'], hidden_dim=2*cfg['input_dim'], output_dim=cfg['output_dim'], n_layers=cfg['n_layers']
+    input_dim=cfg['input_dim'], hidden_dim=cfg['hidden_dim'], output_dim=cfg['output_dim'], n_layers=cfg['n_layers']
     )
     adapter.load_state_dict(
-        torch.load(f"{EMBEDDINGS_DATASET_PATH}/model_1.pt")
+        torch.load(f"{EMBEDDINGS_DATASET_PATH}/model_3.pt")
     )
 
+    model = imagebind_model.imagebind_huge(pretrained=True)
+    setattr(model, "dtype", torch.float16)
     pipeline = AudioToImgPipeline(
-        imagebind= None,#imagebind_model.imagebind_huge(pretrained=True),
+        imagebind=model,
         adapter=adapter, #type: ignore
         vae=AutoencoderKL.from_pretrained(SDXL_PATH, subfolder="vae"), #type: ignore
         tokenizer=CLIPTokenizer.from_pretrained(SDXL_PATH, subfolder="tokenizer"), #type: ignore
