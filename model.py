@@ -5,9 +5,9 @@ from typing import Dict
 import numpy as np
 from common import stub, TRAIN_DATASET_PATH, TRAIN_DIR_VOLUME, Data, Embedding
 from huggingface_hub import snapshot_download
-SDXL_PATH = "stabilityai/sdxl-turbo"
-CLIP_MODEL_PATH = f"{SDXL_PATH}/text_encoder_2"
-CLIP_TOKENIZER_PATH = f"{SDXL_PATH}/tokenizer_2"
+SDXL_PATH = "Lykon/dreamshaper-7"
+CLIP_MODEL_PATH = f"{SDXL_PATH}/text_encoder"
+CLIP_TOKENIZER_PATH = f"{SDXL_PATH}/tokenizer"
 
 
 def download_model():
@@ -85,6 +85,7 @@ class ImageBindModel:
         print("gpu memory after model load in gb", torch.cuda.memory_allocated() / 1e9) 
         self.gb_left = torch.cuda.get_device_properties(0).total_memory / 1e9 - torch.cuda.memory_allocated() / 1e9
         print("gb left", self.gb_left)
+        self.dtype = torch.float16
 
     @method()
     def call(self, data_dict : dict) -> dict:
@@ -118,7 +119,7 @@ class DiffusionEncoder():
     @build()
     def build(self):
         snapshot_download(
-        repo_id="stabilityai/sdxl-turbo", local_dir=SDXL_PATH
+        repo_id=SDXL_PATH, local_dir=SDXL_PATH
     )
     @enter()
     def load(self):

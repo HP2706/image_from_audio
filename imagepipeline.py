@@ -21,7 +21,7 @@ from diffusers import (
 from diffusers.schedulers import PNDMScheduler, LMSDiscreteScheduler, PNDMScheduler
 import inspect
 from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
-
+from train_adapter import Adapter
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput, StableDiffusionMixin
 from diffusers.pipelines.stable_diffusion.pipeline_output import StableDiffusionPipelineOutput
@@ -32,6 +32,8 @@ from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
     rescale_noise_cfg
 )
 
+import json
+
 with image.imports():
     import imagebind.data as data
     from imagebind.models import imagebind_model
@@ -41,59 +43,8 @@ def set_requires_grad(model, value):
         param.requires_grad = value
 
 
-class Adapter(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, n_layers) -> None:
-        super().__init__()
-        self.l1 = nn.Linear(input_dim, hidden_dim)
-        self.intermediate_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(n_layers)])
-        self.non_lins = nn.ModuleList([nn.GELU() for _ in range(n_layers)])
-        self.l_out = nn.Linear(hidden_dim, output_dim)
-    
-    def forward(self, x):
-        #x is of shape [batch_size, input_dim]
-        x = self.l1(x)
-        for intermediate_layer, non_lin in zip(self.intermediate_layers, self.non_lins):
-            x = non_lin(intermediate_layer(x))
-        return self.l_out(x)
-
-EXAMPLE_DOC_STRING = """
-    Examples:
-        ```py
-        >>> from diffusers.pipelines import BlipDiffusionPipeline
-        >>> from diffusers.utils import load_image
-        >>> import torch
-
-        >>> blip_diffusion_pipe = BlipDiffusionPipeline.from_pretrained(
-        ...     "Salesforce/blipdiffusion", torch_dtype=torch.float16
-        ... ).to("cuda")
 
 
-        >>> cond_subject = "dog"
-        >>> tgt_subject = "dog"
-        >>> text_prompt_input = "swimming underwater"
-
-        >>> cond_image = load_image(
-        ...     "https://huggingface.co/datasets/ayushtues/blipdiffusion_images/resolve/main/dog.jpg"
-        ... )
-        >>> guidance_scale = 7.5
-        >>> num_inference_steps = 25
-        >>> negative_prompt = "over-exposure, under-exposure, saturated, duplicate, out of frame, lowres, cropped, worst quality, low quality, jpeg artifacts, morbid, mutilated, out of frame, ugly, bad anatomy, bad proportions, deformed, blurry, duplicate"
-
-
-        >>> output = blip_diffusion_pipe(
-        ...     text_prompt_input,
-        ...     cond_image,
-        ...     cond_subject,
-        ...     tgt_subject,
-        ...     guidance_scale=guidance_scale,
-        ...     num_inference_steps=num_inference_steps,
-        ...     neg_prompt=negative_prompt,
-        ...     height=512,
-        ...     width=512,
-        ... ).images
-        >>> output[0].save("image.png")
-        ```
-"""
 
 
 class AudioToImgPipeline(DiffusionPipeline):
@@ -103,11 +54,11 @@ class AudioToImgPipeline(DiffusionPipeline):
         self,
         imagebind : Any,
         adapter: Adapter,
-        text_encoder: CLIPTextModel,
         tokenizer: CLIPTokenizer,
         vae: AutoencoderKL,
         unet: UNet2DConditionModel,
         scheduler: PNDMScheduler,
+        image_processor : VaeImageProcessor,
         mean: List[float] = None,
         std: List[float] = None,
     ):
@@ -115,12 +66,12 @@ class AudioToImgPipeline(DiffusionPipeline):
 
         self.register_modules(
             tokenizer=tokenizer,
-            text_encoder=text_encoder,
             adapter=adapter,
             vae=vae,
             unet=unet,
             scheduler=scheduler,
             imagebind=imagebind,
+            image_processor=image_processor
         )
         self.register_to_config(mean=mean, std=std)
 
@@ -145,20 +96,22 @@ class AudioToImgPipeline(DiffusionPipeline):
     def encode_audio(self, audio_path : List[str], device=None):
         device = device or self._execution_device
 
-        os.chdir('/ImageBind')
+        ''' os.chdir('/ImageBind')
         data_dict = { 
             'audio': data.load_and_transform_audio_data(audio_path, device), # we only use the text part
         }
         with torch.no_grad():
-            self.imagebind.to(device)
+            #self.imagebind.to(device)
             print("loading imagebind to device", device)
             embeddings_dict = self.imagebind(data_dict)
         embeddings = embeddings_dict['audio']
-        self.imagebind.to('cpu')
-        self.adapter.to(device)
-        print("loading adapter to device", device)
-        aligned_audio_embeddings = self.adapter.forward(embeddings)
-        self.adapter.to('cpu')
+        #self.imagebind.to('cpu')
+        #self.adapter.to(device)
+        print("loading adapter to device", device) '''
+        emb = torch.randn([len(audio_path), 1024]).to('cuda')
+        aligned_audio_embeddings = self.adapter.forward(emb)
+
+        aligned_audio_embeddings = aligned_audio_embeddings.unsqueeze(1)
         return aligned_audio_embeddings
 
     @torch.no_grad()
@@ -224,7 +177,7 @@ class AudioToImgPipeline(DiffusionPipeline):
         Returns:
             [`~pipelines.ImagePipelineOutput`] or `tuple`
         """
-        device = self._execution_device
+        device = "cuda"
         assert isinstance(audio_path, list), "audio_path should be a list of strings"
         assert all(isinstance(path, str) for path in audio_path), "audio_path should be a list of strings"
         batch_size = len(audio_path)
@@ -255,7 +208,7 @@ class AudioToImgPipeline(DiffusionPipeline):
             # expand the latents if we are doing classifier free guidance
             do_classifier_free_guidance = guidance_scale > 1.0
             self.unet.config.addition_embed_type = "none" 
-            latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+            latent_model_input =  latents
             print("latent_model_input", latent_model_input.shape, latent_model_input.device)
             noise_pred = self.unet(
                 latent_model_input,
@@ -266,10 +219,6 @@ class AudioToImgPipeline(DiffusionPipeline):
                 mid_block_additional_residual=None,
             )["sample"]
 
-            # perform guidance
-            if do_classifier_free_guidance:
-                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
             latents = self.scheduler.step(
                 noise_pred,
@@ -313,22 +262,23 @@ def try_diffusion_pipeline(audio_path : str):
             raise FileNotFoundError(f"Audio file {audio_path} not found")
         print("audio_path", audio_path)
 
+    cfg = json.load(open(f"{EMBEDDINGS_DATASET_PATH}/model_1.json"))
+    print("config", cfg)
     adapter = Adapter(
-    input_dim=1024, hidden_dim=2*1024, output_dim=1280, n_layers=1
+    input_dim=cfg['input_dim'], hidden_dim=2*cfg['input_dim'], output_dim=cfg['output_dim'], n_layers=cfg['n_layers']
     )
     adapter.load_state_dict(
         torch.load(f"{EMBEDDINGS_DATASET_PATH}/model_1.pt")
     )
 
-
     pipeline = AudioToImgPipeline(
-        imagebind= imagebind_model.imagebind_huge(pretrained=True),
+        imagebind= None,#imagebind_model.imagebind_huge(pretrained=True),
         adapter=adapter, #type: ignore
         vae=AutoencoderKL.from_pretrained(SDXL_PATH, subfolder="vae"), #type: ignore
-        text_encoder=CLIPTextModel.from_pretrained(SDXL_PATH, subfolder="text_encoder_2"), #type: ignore
-        tokenizer=CLIPTokenizer.from_pretrained(SDXL_PATH, subfolder="tokenizer_2"), #type: ignore
+        tokenizer=CLIPTokenizer.from_pretrained(SDXL_PATH, subfolder="tokenizer"), #type: ignore
         unet=UNet2DConditionModel.from_pretrained(SDXL_PATH, subfolder ="unet"), #type: ignore
+        image_processor=VaeImageProcessor(),
         scheduler=PNDMScheduler(),
-    )
-
-    pipeline(audio_path=[audio_path], output_type="pil", return_dict=False, num_inference_steps=20)
+    ).to("cuda")
+    #pipeline = DiffusionPipeline.from_pretrained("stabilityai/sdxl-turbo")
+    return pipeline(audio_path=[audio_path], output_type="pil", return_dict=False, num_inference_steps=20)

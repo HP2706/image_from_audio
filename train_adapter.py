@@ -1,6 +1,7 @@
 from common import stub, TRAIN_DIR_VOLUME, TRAIN_DATASET_PATH, EMBEDDINGS_DATASET_PATH
 from modal import Image, gpu
 from model import image
+import json
 
 with image.imports():
     from torch import nn
@@ -14,6 +15,7 @@ class Adapter(nn.Module):
         self.intermediate_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(n_layers)])
         self.non_lins = nn.ModuleList([nn.GELU() for _ in range(n_layers)])
         self.l_out = nn.Linear(hidden_dim, output_dim)
+        self.dtype = torch.float16
     
     def forward(self, x):
         #x is of shape [batch_size, input_dim]
@@ -44,8 +46,10 @@ def train():
     ).rename(columns={'embedding': 'clip_embedding'})
 
     input_dim = torch.tensor(image_bind_df.iloc[0]['imagebind_embedding']).shape[0]
+    print("imagebind_embedding dim", input_dim)
     output_dim = torch.tensor(diffusion_df.iloc[0]['clip_embedding']).shape[0]
-    #join on id
+    print("clip_embedding dim", output_dim)
+
     df = image_bind_df.merge(diffusion_df, on='id')
 
     #define model
@@ -77,5 +81,7 @@ def train():
                 print(f"mse loss: {loss.item()} at index {i} epoch {epoch}")
 
         torch.save(model.state_dict(), f"{EMBEDDINGS_DATASET_PATH}/model_{n_layers}.pt")
+        with open(f"{EMBEDDINGS_DATASET_PATH}/model_{n_layers}.json", 'w') as f:
+            f.write(json.dumps({'input_dim': input_dim, 'output_dim': output_dim, 'n_layers': n_layers}))
         TRAIN_DIR_VOLUME.commit()
 

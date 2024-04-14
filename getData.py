@@ -80,7 +80,7 @@ def embed_data(cache=False):
         if model_class.__name__ == "ImageBindModel":
             batch_size = 256
         else:
-            batch_size = 2*128
+            batch_size = 2*256
         model = model_class()
 
         print(f"embedding using model {model_class.__name__} with batch size {batch_size}")
